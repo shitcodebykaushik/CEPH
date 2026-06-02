@@ -19,11 +19,6 @@ import (
 func main() {
 	fmt.Println("=== Micro-Cloud Orchestrator Starting ===")
 
-	cfgPath := os.Getenv("CEPH_CONF")
-	if cfgPath == "" {
-		cfgPath = "/etc/ceph/ceph.conf"
-	}
-
 	dbPath := os.Getenv("MICRO_CLOUD_DB")
 	if dbPath == "" {
 		dbPath = "/app/data/micro-cloud.db"
@@ -34,11 +29,24 @@ func main() {
 	}
 	defer database.CloseDB()
 
-	cephMgr, err := storage.NewCephManager(cfgPath)
-	if err != nil {
-		log.Fatalf("[CEPH] Connection failed: %v", err)
+	minioEndpoint := os.Getenv("MINIO_ENDPOINT")
+	if minioEndpoint == "" {
+		minioEndpoint = "127.0.0.1:9000"
 	}
-	defer cephMgr.Close()
+	minioAccessKey := os.Getenv("MINIO_ACCESS_KEY")
+	if minioAccessKey == "" {
+		minioAccessKey = "minioadmin"
+	}
+	minioSecretKey := os.Getenv("MINIO_SECRET_KEY")
+	if minioSecretKey == "" {
+		minioSecretKey = "minioadmin"
+	}
+
+	minioMgr, err := storage.NewMinioManager(minioEndpoint, minioAccessKey, minioSecretKey, false)
+	if err != nil {
+		log.Printf("[MINIO] Connection failed (non-fatal): %v", err)
+		minioMgr = nil
+	}
 
 	dockerClient, err := client.NewClientWithOpts(
 		client.FromEnv,
@@ -56,7 +64,7 @@ func main() {
 		fmt.Printf("[DOCKER] ✓ Docker version: %s (API: %s)\n", version.Version, version.APIVersion)
 	}
 
-	eng := orchestrator.NewEngine(cephMgr, dockerClient)
+	eng := orchestrator.NewEngine(minioMgr, dockerClient)
 	handler := api.NewHandler(eng)
 	router := api.SetupRouter(handler)
 

@@ -47,8 +47,15 @@ func init() {
 var Handler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 	p := strings.TrimPrefix(r.URL.Path, "/static")
 	p = strings.TrimPrefix(p, "/")
-	if p == "" {
-		p = "index.html"
+	if p == "" || p == "portal" || p == "terminal" {
+		switch p {
+		case "portal":
+			p = "portal.html"
+		case "terminal":
+			p = "terminal.html"
+		default:
+			p = "index.html"
+		}
 	}
 
 	data, ok := files[p]

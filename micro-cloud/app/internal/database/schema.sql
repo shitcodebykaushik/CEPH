@@ -10,10 +10,7 @@ CREATE TABLE IF NOT EXISTS volumes (
     id              TEXT PRIMARY KEY,
     tenant_id       TEXT NOT NULL,
     size_mb         INTEGER NOT NULL,
-    status          TEXT DEFAULT 'creating', -- creating, available, attached, deleting
-    pool_name       TEXT DEFAULT 'rbd',
-    image_name      TEXT NOT NULL,
-    device_path     TEXT,
+    status          TEXT DEFAULT 'creating', -- creating, available, attached, deleted
     mount_path      TEXT,
     created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
@@ -28,6 +25,8 @@ CREATE TABLE IF NOT EXISTS workspaces (
     internal_ip     TEXT,
     port            INTEGER,
     status          TEXT DEFAULT 'launching', -- launching, running, stopping, stopped, failed
+    requester_name  TEXT DEFAULT '',
+    requester_email TEXT DEFAULT '',
     created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
     FOREIGN KEY (associated_volume_id) REFERENCES volumes(id) ON DELETE SET NULL

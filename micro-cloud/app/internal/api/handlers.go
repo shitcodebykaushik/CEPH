@@ -114,11 +114,10 @@ func (h *Handler) CreateVolume(w http.ResponseWriter, r *http.Request) {
 	}
 
 	volumeID := uuid.New().String()
-	imageName := fmt.Sprintf("vol-%s", volumeID[:8])
 
 	_, err := database.Exec(
-		`INSERT INTO volumes (id, tenant_id, size_mb, status, pool_name, image_name) VALUES (?, ?, ?, 'creating', 'rbd', ?)`,
-		volumeID, req.TenantID, req.SizeMB, imageName,
+		`INSERT INTO volumes (id, tenant_id, size_mb, status) VALUES (?, ?, ?, 'creating')`,
+		volumeID, req.TenantID, req.SizeMB,
 	)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, "failed to create volume record")
@@ -126,7 +125,7 @@ func (h *Handler) CreateVolume(w http.ResponseWriter, r *http.Request) {
 	}
 
 	go func() {
-		if err := h.Engine.CreateVolume(req.TenantID, volumeID, imageName, "rbd", req.SizeMB); err != nil {
+		if err := h.Engine.CreateVolume(req.TenantID, volumeID, req.SizeMB); err != nil {
 			log.Printf("[VOLUME] Provisioning failed for %s: %v", volumeID, err)
 			database.Exec(`UPDATE volumes SET status = 'failed' WHERE id = ?`, volumeID)
 		}
@@ -144,10 +143,10 @@ func (h *Handler) ListVolumes(w http.ResponseWriter, r *http.Request) {
 	var rows_query string
 	var args []any
 	if tenantID != "" {
-		rows_query = `SELECT id, tenant_id, size_mb, status, pool_name, image_name, COALESCE(device_path,''), COALESCE(mount_path,''), created_at FROM volumes WHERE tenant_id = ?`
+		rows_query = `SELECT id, tenant_id, size_mb, status, COALESCE(mount_path,''), created_at FROM volumes WHERE tenant_id = ?`
 		args = append(args, tenantID)
 	} else {
-		rows_query = `SELECT id, tenant_id, size_mb, status, pool_name, image_name, COALESCE(device_path,''), COALESCE(mount_path,''), created_at FROM volumes`
+		rows_query = `SELECT id, tenant_id, size_mb, status, COALESCE(mount_path,''), created_at FROM volumes`
 	}
 
 	rows, err := database.Query(rows_query, args...)
@@ -160,7 +159,7 @@ func (h *Handler) ListVolumes(w http.ResponseWriter, r *http.Request) {
 	var volumes []VolumeResponse
 	for rows.Next() {
 		var v VolumeResponse
-		if err := rows.Scan(&v.ID, &v.TenantID, &v.SizeMB, &v.Status, &v.PoolName, &v.ImageName, &v.DevicePath, &v.MountPath, &v.CreatedAt); err != nil {
+		if err := rows.Scan(&v.ID, &v.TenantID, &v.SizeMB, &v.Status, &v.MountPath, &v.CreatedAt); err != nil {
 			continue
 		}
 		volumes = append(volumes, v)
@@ -190,11 +189,10 @@ func (h *Handler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
 
 	workspaceID := uuid.New().String()
 	volumeID := uuid.New().String()
-	imageName := fmt.Sprintf("ws-%s", workspaceID[:8])
 
 	_, err := database.Exec(
-		`INSERT INTO workspaces (id, tenant_id, image, associated_volume_id, status) VALUES (?, ?, ?, ?, 'launching')`,
-		workspaceID, req.TenantID, req.Image, volumeID,
+		`INSERT INTO workspaces (id, tenant_id, image, associated_volume_id, status, requester_name, requester_email) VALUES (?, ?, ?, ?, 'launching', ?, ?)`,
+		workspaceID, req.TenantID, req.Image, volumeID, req.RequesterName, req.RequesterEmail,
 	)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, "failed to create workspace record")
@@ -202,8 +200,8 @@ func (h *Handler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, err = database.Exec(
-		`INSERT INTO volumes (id, tenant_id, size_mb, status, pool_name, image_name) VALUES (?, ?, ?, 'creating', 'rbd', ?)`,
-		volumeID, req.TenantID, req.SizeMB, imageName,
+		`INSERT INTO volumes (id, tenant_id, size_mb, status) VALUES (?, ?, ?, 'creating')`,
+		volumeID, req.TenantID, req.SizeMB,
 	)
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, "failed to create volume record")
@@ -211,12 +209,74 @@ func (h *Handler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 
 	go func() {
-		if err := h.Engine.LaunchWorkspace(workspaceID, volumeID, req.TenantID, imageName, "rbd", req.SizeMB, req.Image); err != nil {
+		if err := h.Engine.LaunchWorkspace(workspaceID, volumeID, req.TenantID, req.SizeMB, req.Image); err != nil {
 			log.Printf("[WORKSPACE] Provisioning failed for %s: %v", workspaceID, err)
 			database.Exec(`UPDATE workspaces SET status = 'failed' WHERE id = ?`, workspaceID)
 		}
 	}()
 
+	jsonResp(w, http.StatusAccepted, map[string]string{
+		"workspace_id": workspaceID,
+		"volume_id":    volumeID,
+		"status":       "launching",
+	})
+}
+
+func (h *Handler) RequestWorkspace(w http.ResponseWriter, r *http.Request) {
+	var req RequestWorkspaceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Name == "" || req.Email == "" {
+		jsonErr(w, http.StatusBadRequest, "name and email are required")
+		return
+	}
+	if req.Image == "" {
+		req.Image = "alpine:latest"
+	}
+	if req.SizeMB <= 0 {
+		req.SizeMB = 512
+	}
+
+	tenantID := r.URL.Query().Get("tenant_id")
+	if tenantID == "" {
+		row := database.QueryRow(`SELECT id FROM tenants ORDER BY created_at ASC LIMIT 1`)
+		if err := row.Scan(&tenantID); err != nil {
+			jsonErr(w, http.StatusNotFound, "no tenant available; create one first")
+			return
+		}
+	}
+
+	workspaceID := uuid.New().String()
+	volumeID := uuid.New().String()
+
+	_, err := database.Exec(
+		`INSERT INTO workspaces (id, tenant_id, image, associated_volume_id, status, requester_name, requester_email) VALUES (?, ?, ?, ?, 'launching', ?, ?)`,
+		workspaceID, tenantID, req.Image, volumeID, req.Name, req.Email,
+	)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, "failed to create workspace")
+		return
+	}
+
+	_, err = database.Exec(
+		`INSERT INTO volumes (id, tenant_id, size_mb, status) VALUES (?, ?, ?, 'creating')`,
+		volumeID, tenantID, req.SizeMB,
+	)
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, "failed to create volume")
+		return
+	}
+
+	go func() {
+		if err := h.Engine.LaunchWorkspace(workspaceID, volumeID, tenantID, req.SizeMB, req.Image); err != nil {
+			log.Printf("[WORKSPACE] Provisioning failed for %s: %v", workspaceID, err)
+			database.Exec(`UPDATE workspaces SET status = 'failed' WHERE id = ?`, workspaceID)
+		}
+	}()
+
+	log.Printf("[WORKSPACE] User %s (%s) requested workspace %s", req.Name, req.Email, workspaceID)
 	jsonResp(w, http.StatusAccepted, map[string]string{
 		"workspace_id": workspaceID,
 		"volume_id":    volumeID,
@@ -230,10 +290,10 @@ func (h *Handler) ListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	var rows_query string
 	var args []any
 	if tenantID != "" {
-		rows_query = `SELECT id, tenant_id, COALESCE(container_id,''), image, COALESCE(associated_volume_id,''), COALESCE(internal_ip,''), COALESCE(port,0), status, created_at FROM workspaces WHERE tenant_id = ? ORDER BY created_at DESC`
+		rows_query = `SELECT id, tenant_id, COALESCE(container_id,''), image, COALESCE(associated_volume_id,''), COALESCE(internal_ip,''), COALESCE(port,0), status, COALESCE(requester_name,''), COALESCE(requester_email,''), created_at FROM workspaces WHERE tenant_id = ? ORDER BY created_at DESC`
 		args = append(args, tenantID)
 	} else {
-		rows_query = `SELECT id, tenant_id, COALESCE(container_id,''), image, COALESCE(associated_volume_id,''), COALESCE(internal_ip,''), COALESCE(port,0), status, created_at FROM workspaces ORDER BY created_at DESC`
+		rows_query = `SELECT id, tenant_id, COALESCE(container_id,''), image, COALESCE(associated_volume_id,''), COALESCE(internal_ip,''), COALESCE(port,0), status, COALESCE(requester_name,''), COALESCE(requester_email,''), created_at FROM workspaces ORDER BY created_at DESC`
 	}
 
 	rows, err := database.Query(rows_query, args...)
@@ -246,7 +306,7 @@ func (h *Handler) ListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	var workspaces []WorkspaceResponse
 	for rows.Next() {
 		var ws WorkspaceResponse
-		if err := rows.Scan(&ws.ID, &ws.TenantID, &ws.ContainerID, &ws.Image, &ws.VolumeID, &ws.InternalIP, &ws.Port, &ws.Status, &ws.CreatedAt); err != nil {
+		if err := rows.Scan(&ws.ID, &ws.TenantID, &ws.ContainerID, &ws.Image, &ws.VolumeID, &ws.InternalIP, &ws.Port, &ws.Status, &ws.RequesterName, &ws.RequesterEmail, &ws.CreatedAt); err != nil {
 			continue
 		}
 		workspaces = append(workspaces, ws)
@@ -260,11 +320,11 @@ func (h *Handler) ListWorkspaces(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) GetWorkspace(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	row := database.QueryRow(
-		`SELECT id, tenant_id, COALESCE(container_id,''), image, COALESCE(associated_volume_id,''), COALESCE(internal_ip,''), COALESCE(port,0), status, created_at FROM workspaces WHERE id = ?`, id,
+		`SELECT id, tenant_id, COALESCE(container_id,''), image, COALESCE(associated_volume_id,''), COALESCE(internal_ip,''), COALESCE(port,0), status, COALESCE(requester_name,''), COALESCE(requester_email,''), created_at FROM workspaces WHERE id = ?`, id,
 	)
 
 	var ws WorkspaceResponse
-	if err := row.Scan(&ws.ID, &ws.TenantID, &ws.ContainerID, &ws.Image, &ws.VolumeID, &ws.InternalIP, &ws.Port, &ws.Status, &ws.CreatedAt); err != nil {
+	if err := row.Scan(&ws.ID, &ws.TenantID, &ws.ContainerID, &ws.Image, &ws.VolumeID, &ws.InternalIP, &ws.Port, &ws.Status, &ws.RequesterName, &ws.RequesterEmail, &ws.CreatedAt); err != nil {
 		jsonErr(w, http.StatusNotFound, "workspace not found")
 		return
 	}

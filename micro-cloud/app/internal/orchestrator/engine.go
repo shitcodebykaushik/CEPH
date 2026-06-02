@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 
 	"github.com/docker/docker/client"
 	"github.com/shiiit/micro-cloud/internal/database"
@@ -13,20 +12,20 @@ import (
 )
 
 type Engine struct {
-	Ceph   *storage.CephManager
+	Minio  *storage.MinioManager
 	Docker *client.Client
 }
 
-func NewEngine(cm *storage.CephManager, dc *client.Client) *Engine {
+func NewEngine(mm *storage.MinioManager, dc *client.Client) *Engine {
 	return &Engine{
-		Ceph:   cm,
+		Minio:  mm,
 		Docker: dc,
 	}
 }
 
-func (e *Engine) CreateVolume(tenantID, volumeID, imageName, pool string, sizeMB int) error {
-	if err := e.Ceph.CreateRBDImage(pool, imageName, sizeMB); err != nil {
-		return fmt.Errorf("create rbd image: %w", err)
+func (e *Engine) CreateVolume(tenantID, volumeID string, sizeMB int) error {
+	if err := storage.CreateVolumeDir(volumeID); err != nil {
+		return fmt.Errorf("create volume dir: %w", err)
 	}
 
 	if _, err := database.Exec(
@@ -36,52 +35,24 @@ func (e *Engine) CreateVolume(tenantID, volumeID, imageName, pool string, sizeMB
 		return fmt.Errorf("update volume status: %w", err)
 	}
 
-	log.Printf("[ENGINE] Volume %s ready (%d MB, pool=%s, image=%s)", volumeID, sizeMB, pool, imageName)
+	log.Printf("[ENGINE] Volume %s ready (%d MB)", volumeID, sizeMB)
 	return nil
 }
 
-func (e *Engine) LaunchWorkspace(workspaceID, volumeID, tenantID, imageName, pool string, sizeMB int, containerImage string) error {
+func (e *Engine) LaunchWorkspace(workspaceID, volumeID, tenantID string, sizeMB int, containerImage string) error {
 	log.Printf("[ENGINE] Launching workspace %s for tenant %s", workspaceID, tenantID)
 
-	if err := e.Ceph.CreateRBDImage(pool, imageName, sizeMB); err != nil {
+	mountPath := storage.VolumeDirPath(volumeID)
+
+	if err := storage.CreateVolumeDir(volumeID); err != nil {
 		database.Exec(`UPDATE volumes SET status = 'failed' WHERE id = ?`, volumeID)
-		return fmt.Errorf("create rbd image: %w", err)
+		return fmt.Errorf("create volume dir: %w", err)
 	}
 
-	mountPath := storage.VolumeMountPath(volumeID)
-
-	devPath, err := storage.MapRBDDevice(pool, imageName)
-	if err != nil {
-		log.Printf("[ENGINE] RBD map failed, using directory fallback: %v", err)
-		if err := os.MkdirAll(mountPath, 0755); err != nil {
-			e.cleanupVolume(volumeID, pool, imageName, "")
-			return fmt.Errorf("mkdir fallback: %w", err)
-		}
-		database.Exec(
-			`UPDATE volumes SET status = 'attached', mount_path = ? WHERE id = ?`,
-			mountPath, volumeID,
-		)
-	} else {
-		devPath = sanitizeDevicePath(devPath)
-
-		if err := storage.FormatDevice(devPath); err != nil {
-			log.Printf("[ENGINE] Format failed: %v", err)
-			e.cleanupVolume(volumeID, pool, imageName, devPath)
-			return fmt.Errorf("format device: %w", err)
-		}
-
-		if err := storage.MountDevice(devPath, mountPath); err != nil {
-			log.Printf("[ENGINE] Mount failed: %v", err)
-			e.cleanupVolume(volumeID, pool, imageName, devPath)
-			return fmt.Errorf("mount device: %w", err)
-		}
-
-		database.Exec(
-			`UPDATE volumes SET status = 'attached', device_path = ?, mount_path = ? WHERE id = ?`,
-			devPath, mountPath, volumeID,
-		)
-		log.Printf("[ENGINE] Volume %s mapped at %s -> %s", volumeID, devPath, mountPath)
-	}
+	database.Exec(
+		`UPDATE volumes SET status = 'attached', mount_path = ? WHERE id = ?`,
+		mountPath, volumeID,
+	)
 
 	log.Printf("[ENGINE] Pulling image %s ...", containerImage)
 	if err := storage.PullImage(context.Background(), e.Docker, containerImage); err != nil {
@@ -95,11 +66,7 @@ func (e *Engine) LaunchWorkspace(workspaceID, volumeID, tenantID, imageName, poo
 	})
 	if err != nil {
 		log.Printf("[ENGINE] Container launch failed: %v", err)
-		if devPath != "" {
-			storage.UnmountDevice(mountPath)
-			storage.UnmapRBDDevice(devPath)
-		}
-		e.cleanupVolume(volumeID, pool, imageName, devPath)
+		e.cleanupVolume(volumeID)
 		return fmt.Errorf("launch container: %w", err)
 	}
 
@@ -132,24 +99,8 @@ func (e *Engine) TerminateWorkspace(workspaceID, containerID, volumeID string) e
 		}
 	}
 
-	var volumeMountPath, devicePath, poolName, imageName string
-	row := database.QueryRow(
-		`SELECT COALESCE(mount_path,''), COALESCE(device_path,''), pool_name, image_name FROM volumes WHERE id = ?`,
-		volumeID,
-	)
-	row.Scan(&volumeMountPath, &devicePath, &poolName, &imageName)
-
-	if volumeMountPath != "" {
-		storage.UnmountDevice(volumeMountPath)
-	}
-	if devicePath != "" {
-		storage.UnmapRBDDevice(devicePath)
-	}
-
-	if poolName != "" && imageName != "" {
-		if err := e.Ceph.RemoveRBDImage(poolName, imageName); err != nil {
-			log.Printf("[ENGINE] Remove RBD image error: %v", err)
-		}
+	if volumeID != "" {
+		storage.RemoveVolumeDir(volumeID)
 	}
 
 	database.Exec(`UPDATE volumes SET status = 'deleted' WHERE id = ?`, volumeID)
@@ -159,31 +110,7 @@ func (e *Engine) TerminateWorkspace(workspaceID, containerID, volumeID string) e
 	return nil
 }
 
-func (e *Engine) cleanupVolume(volumeID, pool, imageName, devPath string) {
+func (e *Engine) cleanupVolume(volumeID string) {
 	database.Exec(`UPDATE volumes SET status = 'failed' WHERE id = ?`, volumeID)
-	if devPath != "" {
-		if err := storage.UnmapRBDDevice(devPath); err != nil {
-			log.Printf("[CLEANUP] Unmap error: %v", err)
-		}
-	}
-	if pool != "" && imageName != "" {
-		if err := e.Ceph.RemoveRBDImage(pool, imageName); err != nil {
-			log.Printf("[CLEANUP] Remove image error: %v", err)
-		}
-	}
-}
-
-func sanitizeDevicePath(raw string) string {
-	path := raw
-	if path == "" {
-		return path
-	}
-	path = filepath.Clean(path)
-
-	resolved, err := filepath.EvalSymlinks(path)
-	if err == nil {
-		return resolved
-	}
-
-	return path
+	storage.RemoveVolumeDir(volumeID)
 }

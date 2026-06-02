@@ -31,8 +31,10 @@ func SetupRouter(h *Handler) *chi.Mux {
 
 		r.Route("/workspaces", func(r chi.Router) {
 			r.Post("/", h.CreateWorkspace)
+			r.Post("/request", h.RequestWorkspace)
 			r.Get("/", h.ListWorkspaces)
 			r.Get("/{id}", h.GetWorkspace)
+			r.Get("/{id}/terminal", h.WorkspaceTerminal)
 			r.Delete("/{id}", h.DeleteWorkspace)
 		})
 	})
@@ -41,6 +43,14 @@ func SetupRouter(h *Handler) *chi.Mux {
 		r.Get("/*", func(w http.ResponseWriter, req *http.Request) {
 			web.Handler.ServeHTTP(w, req)
 		})
+	})
+
+	r.Get("/portal", func(w http.ResponseWriter, req *http.Request) {
+		web.Handler.ServeHTTP(w, req)
+	})
+
+	r.Get("/terminal", func(w http.ResponseWriter, req *http.Request) {
+		web.Handler.ServeHTTP(w, req)
 	})
 
 	r.Get("/", func(w http.ResponseWriter, req *http.Request) {

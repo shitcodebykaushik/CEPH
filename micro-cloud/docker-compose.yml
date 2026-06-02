@@ -1,142 +1,40 @@
-networks:
-  ceph-net:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.28.0.0/16             
-
 services:
 
-  # ── 1. Ceph Monitor ────────────────────────────────────────────────────
-  ceph-mon:
-    image: ceph/daemon:latest-pacific      
-    container_name: ceph-mon
-    hostname: ceph-mon
+  # ── 1. MinIO Object Storage ─────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    hostname: minio
+    network_mode: host
+    command: server /data --console-address ":9001"
     environment:
-      - MON_IP=172.28.0.10                  
-      - CEPH_PUBLIC_NETWORK=172.28.0.0/16   
-      - CEPH_DAEMON=MON                     
-      - NETWORK_AUTO_DETECT=0               
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
     volumes:
-      - ./ceph_config:/etc/ceph                      
-    networks:
-      ceph-net:
-        ipv4_address: 172.28.0.10           
+      - ./minio_data:/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "ceph", "-s", "--connect-timeout", "5"]
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
       interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 30s
+      retries: 3
+      start_period: 10s
 
-  # ── 2. Ceph Manager ────────────────────────────────────────────────────
-  ceph-mgr:
-    image: ceph/daemon:latest-pacific
-    container_name: ceph-mgr
-    hostname: ceph-mgr
-    environment:
-      - CEPH_DAEMON=MGR
-    volumes:
-      - ./ceph_config:/etc/ceph
-    networks:
-      ceph-net:
-        ipv4_address: 172.28.0.13
-    depends_on:
-      ceph-mon:
-        condition: service_healthy
-    restart: unless-stopped
-
-  # ── 3. Ceph OSD Bootstrap (one-shot init) ─────────────────────────────
-  ceph-bootstrap:
-    image: ceph/daemon:latest-pacific
-    container_name: ceph-bootstrap
-    depends_on:
-      ceph-mon:
-        condition: service_healthy
-    volumes:
-      - ./ceph_config:/etc/ceph
-      - ./ceph_bootstrap:/var/lib/ceph/bootstrap-osd
-      - ./osd_storage:/var/lib/ceph/osd
-    networks:
-      ceph-net:
-        ipv4_address: 172.28.0.14
-    entrypoint: /bin/bash
-    command:
-      - -c
-      - |
-        set -e
-        echo '=== Ceph OSD Bootstrap ==='
-        echo 'Waiting for monitor...'
-        until ceph -s --connect-timeout 5 &>/dev/null; do sleep 2; done
-        echo 'Monitor is ready.'
-
-        if [ ! -f /var/lib/ceph/bootstrap-osd/ceph.keyring ]; then
-          echo 'Creating bootstrap-osd keyring...'
-          ceph auth get-or-create client.bootstrap-osd mon 'allow profile bootstrap-osd' -o /var/lib/ceph/bootstrap-osd/ceph.keyring 2>/dev/null
-          chmod 644 /var/lib/ceph/bootstrap-osd/ceph.keyring
-        fi
-
-        OSD_COUNT=$$(ceph osd ls 2>/dev/null | wc -l)
-        if [ "$${OSD_COUNT}" -eq 0 ]; then
-          OSD_ID=$$(ceph osd create)
-          OSD_DIR="/var/lib/ceph/osd/ceph-$${OSD_ID}"
-          mkdir -p "$${OSD_DIR}"
-          echo "$${OSD_ID}" > "$${OSD_DIR}/whoami"
-          echo "Preparing OSD.$${OSD_ID} filesystem..."
-          ceph-osd --cluster ceph -i "$${OSD_ID}" --osd-data "$${OSD_DIR}" --mkfs --mkkey --osd-uuid $$(uuidgen) --no-mon-config
-          chmod 644 "$${OSD_DIR}/keyring"
-          echo "Adding OSD.$${OSD_ID} to cluster auth..."
-          ceph auth add osd.$${OSD_ID} osd 'allow *' mon 'allow profile osd' -i "$${OSD_DIR}/keyring"
-          echo "Adding OSD.$${OSD_ID} to CRUSH map..."
-          ceph osd crush add $${OSD_ID} 1.0 root=default host=ceph-osd
-          echo "OSD.$${OSD_ID} created successfully."
-        else
-          echo "OSD(s) already exist: $$(ceph osd ls | tr '\n' ' ')"
-        fi
-
-        echo '=== Bootstrap Complete ==='
-    restart: "no"
-
-  # ── 4. Ceph OSD (activates pre-prepared OSD data) ─────────────────────
-  ceph-osd:
-    image: ceph/daemon:latest-pacific
-    container_name: ceph-osd
-    hostname: ceph-osd
-    privileged: true
-    depends_on:
-      ceph-bootstrap:
-        condition: service_completed_successfully
-    volumes:
-      - ./ceph_config:/etc/ceph
-      - ./ceph_bootstrap:/var/lib/ceph/bootstrap-osd
-      - ./osd_storage:/var/lib/ceph/osd
-    environment:
-      - CEPH_DAEMON=OSD_DIRECTORY
-    networks:
-      ceph-net:
-        ipv4_address: 172.28.0.11
-    restart: unless-stopped
-
-  # ── 5. Go Orchestrator API ─────────────────────────────────────────────
+  # ── 2. Go Orchestrator API ───────────────────────────────────
   orchestrator-api:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: orchestrator-api
+    network_mode: host
     environment:
-      - CEPH_CONF=/etc/ceph/ceph.conf
+      - MINIO_ENDPOINT=127.0.0.1:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
       - VOLUME_MOUNT_BASE=/tmp/micro-cloud/volumes
     volumes:
-      - ./ceph_config:/etc/ceph
       - /var/run/docker.sock:/var/run/docker.sock
       - /tmp/micro-cloud/volumes:/tmp/micro-cloud/volumes
-    ports:
-      - "8080:8080"
-    networks:
-      ceph-net:
-        ipv4_address: 172.28.0.12
     depends_on:
-      - ceph-mon
-      - ceph-osd
+      - minio
     restart: unless-stopped

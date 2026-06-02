@@ -3,24 +3,25 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Micro-Cloud</title>
+<title>Micro-Cloud Portal</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<nav class="sidebar">
+<nav class="sidebar" id="sidebar">
   <div class="logo">☁️ Micro-Cloud</div>
   <ul>
-    <li data-page="dashboard" class="active"><a href="#dashboard">📊 Dashboard</a></li>
-    <li data-page="tenants"><a href="#tenants">👥 Tenants</a></li>
-    <li data-page="volumes"><a href="#volumes">💾 Volumes</a></li>
-    <li data-page="workspaces"><a href="#workspaces">🖥️ Workspaces</a></li>
+    <li data-page="dashboard" class="active"><a href="#">📊 Dashboard</a></li>
+    <li data-page="workspaces"><a href="#">🖥️ Workspaces</a></li>
+    <li data-page="tenants"><a href="#">👥 Tenants</a></li>
+    <li data-page="volumes"><a href="#">💾 Volumes</a></li>
   </ul>
 </nav>
 <main class="content">
-  <div id="page-dashboard" class="page active"></div>
+  <div id="page-landing" class="page active"></div>
+  <div id="page-dashboard" class="page"></div>
+  <div id="page-workspaces" class="page"></div>
   <div id="page-tenants" class="page"></div>
   <div id="page-volumes" class="page"></div>
-  <div id="page-workspaces" class="page"></div>
 </main>
 <div id="modal-overlay" class="modal-overlay hidden"></div>
 <div id="modal" class="modal hidden">

@@ -4,7 +4,7 @@ set -e
 echo "=== Micro-Cloud Setup ==="
 
 # Start infrastructure
-echo "[1/5] Starting Ceph cluster + orchestrator..."
+echo "[1/5] Starting MinIO + orchestrator..."
 docker compose up -d
 sleep 10
 
