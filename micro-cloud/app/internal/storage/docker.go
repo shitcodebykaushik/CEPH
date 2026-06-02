@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"strconv"
 
@@ -27,11 +28,17 @@ type ContainerResult struct {
 	Port        int
 }
 
-var nextPort int = 10000
-
 func allocatePort() int {
-	nextPort++
-	return nextPort
+	for port := 10001; port < 11000; port++ {
+		addr := fmt.Sprintf("0.0.0.0:%d", port)
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			continue
+		}
+		ln.Close()
+		return port
+	}
+	return 0
 }
 
 func PullImage(ctx context.Context, cli *client.Client, imageRef string) error {
@@ -47,6 +54,9 @@ func PullImage(ctx context.Context, cli *client.Client, imageRef string) error {
 
 func LaunchContainer(ctx context.Context, cli *client.Client, cfg ContainerConfig) (*ContainerResult, error) {
 	port := allocatePort()
+	if port == 0 {
+		return nil, fmt.Errorf("no available port found in range 10001-10999")
+	}
 
 	hostPort := strconv.Itoa(port)
 

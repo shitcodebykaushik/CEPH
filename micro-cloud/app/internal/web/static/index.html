@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Micro-Cloud</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="logo">☁️ Micro-Cloud</div>
+  <ul>
+    <li data-page="dashboard" class="active"><a href="#dashboard">📊 Dashboard</a></li>
+    <li data-page="tenants"><a href="#tenants">👥 Tenants</a></li>
+    <li data-page="volumes"><a href="#volumes">💾 Volumes</a></li>
+    <li data-page="workspaces"><a href="#workspaces">🖥️ Workspaces</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div id="page-dashboard" class="page active"></div>
+  <div id="page-tenants" class="page"></div>
+  <div id="page-volumes" class="page"></div>
+  <div id="page-workspaces" class="page"></div>
+</main>
+<div id="modal-overlay" class="modal-overlay hidden"></div>
+<div id="modal" class="modal hidden">
+  <div class="modal-header"><h3 id="modal-title"></h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
+  <div id="modal-body" class="modal-body"></div>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

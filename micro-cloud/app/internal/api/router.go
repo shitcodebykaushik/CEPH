@@ -1,8 +1,11 @@
 package api
 
 import (
+	"net/http"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/shiiit/micro-cloud/internal/web"
 )
 
 func SetupRouter(h *Handler) *chi.Mux {
@@ -32,6 +35,20 @@ func SetupRouter(h *Handler) *chi.Mux {
 			r.Get("/{id}", h.GetWorkspace)
 			r.Delete("/{id}", h.DeleteWorkspace)
 		})
+	})
+
+	r.Route("/static", func(r chi.Router) {
+		r.Get("/*", func(w http.ResponseWriter, req *http.Request) {
+			web.Handler.ServeHTTP(w, req)
+		})
+	})
+
+	r.Get("/", func(w http.ResponseWriter, req *http.Request) {
+		web.Handler.ServeHTTP(w, req)
+	})
+
+	r.Get("/*", func(w http.ResponseWriter, req *http.Request) {
+		web.Handler.ServeHTTP(w, req)
 	})
 
 	return r
