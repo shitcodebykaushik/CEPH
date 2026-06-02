@@ -1,5 +1,5 @@
 # ── Stage 1: Builder ──────────────────────────────────────────
-FROM golang:1.22-bookworm AS builder
+FROM golang:1.25-bookworm AS builder
 
 WORKDIR /build
 
@@ -33,7 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
-# Pull the binary from stage 1
+# Pull the binary from stage 
 COPY --from=builder /orchestrator-api /app/orchestrator-api
 
 # Create appuser but keep system configuration matching open for development
