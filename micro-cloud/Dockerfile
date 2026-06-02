@@ -25,20 +25,21 @@ FROM debian:bookworm-slim AS runtime
 
 WORKDIR /app
 
-# Crucial: Install runtime system shared objects for Ceph
+# Crucial: Install runtime system shared objects for Ceph + SQLite
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ceph-common \
     librados2 \
     librbd1 \
+    rbd-nbd \
+    libsqlite3-0 \
     ca-certificates \
+    e2fsprogs \
   && rm -rf /var/lib/apt/lists/*
 
 # Pull the binary from stage 
 COPY --from=builder /orchestrator-api /app/orchestrator-api
 
-# Create appuser but keep system configuration matching open for development
-RUN useradd -m appuser && usermod -aG root appuser
-USER appuser
+USER root
 
 EXPOSE 8080
 ENTRYPOINT ["/app/orchestrator-api"]

@@ -5,13 +5,16 @@ go 1.25.0
 require (
 	github.com/ceph/go-ceph v0.26.0
 	github.com/docker/docker v24.0.7+incompatible
+	github.com/docker/go-connections v0.5.0
+	github.com/go-chi/chi/v5 v5.2.1
+	github.com/google/uuid v1.6.0
+	github.com/mattn/go-sqlite3 v1.14.24
 )
 
 require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/distribution/reference v0.5.0 // indirect
 	github.com/docker/distribution v2.8.3+incompatible // indirect
-	github.com/docker/go-connections v0.5.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
