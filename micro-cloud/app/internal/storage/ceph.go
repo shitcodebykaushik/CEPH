@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ceph/go-ceph/rados"
 	"github.com/ceph/go-ceph/rbd"
@@ -41,8 +42,17 @@ func NewCephManager(configPath string) (*CephManager, error) {
 	fsid, _ := conn.GetFSID()
 	log.Printf("[CEPH] Connected, FSID: %s", fsid)
 
-	if err := ensurePool(conn, "rbd"); err != nil {
-		return nil, fmt.Errorf("ensure pool: %w", err)
+	// Retry ensurePool with backoff — Ceph mgr can take minutes to activate
+	for i := 0; i < 20; i++ {
+		err = ensurePool(conn, "rbd")
+		if err == nil {
+			break
+		}
+		log.Printf("[CEPH] Waiting for pool (attempt %d/20): %v", i+1, err)
+		time.Sleep(15 * time.Second)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("ensure pool after retries: %w", err)
 	}
 
 	return &CephManager{Conn: conn}, nil
