@@ -1,3 +1,7 @@
 micro-cloud/ceph_config/
 micro-cloud/ceph_bootstrap/
 micro-cloud/osd_storage/
+micro-cloud/ceph_mon_data/
+# If you want to be safe, ignore all raw keyrings/secrets too
+*.keyring
+*.secret
